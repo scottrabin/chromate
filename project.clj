@@ -1,4 +1,4 @@
-(defproject chromate "0.1.0-SNAPSHOT"
+(defproject chromate "0.37.0-SNAPSHOT"
   :description "A ClojureScript adapter to the Chrome Extensions API"
   :url "https://github.com/scottrabin/chromate"
 
