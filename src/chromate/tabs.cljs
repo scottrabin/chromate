@@ -1,7 +1,6 @@
 (ns chromate.tabs
   (:refer-clojure :exclude [get remove])
   (:require
-    [goog.math.ExponentialBackoff]
     [chromate.types]
     [cljs.reader]
     [cljs.core.async.impl.protocols]
@@ -221,7 +220,10 @@
 
 ; (defevent on-zoom-change js/chrome.tabs.onZoomChange) ; beta channel only
 
-(deftype Port [port ^:mutable closed tx rx]
+; port map is a cache of active connected ports for tabs
+(def ^:private port-map (atom {}))
+
+(deftype Port [tabid port ^:mutable closed tx rx]
   cljs.core.async.impl.protocols/WritePort
   (put! [this val ^not-native handler]
     (cljs.core.async.impl.protocols/put! tx val handler))
@@ -233,44 +235,55 @@
   cljs.core.async.impl.protocols/Channel
   (closed? [_] closed)
   (close! [this]
+    (js/console.debug "port closed" tabid port)
     (set! closed true)
     (.disconnect port)
+    (when-not (nil? tabid)
+      (swap! port-map dissoc tabid))
     (cljs.core.async/close! tx)
     (cljs.core.async/close! rx)))
-
-; port map is a cache of active connected ports for tabs
-(def ^:private port-map (atom {}))
-
-(js/chrome.tabs.onRemoved.addListener
-  (fn [tabid removeinfo]
-    (when-let [port (cljs.core/get port-map tabid)]
-      (cljs.core.async/close! port)
-      (swap! port-map dissoc tabid))))
 
 (defn- -send-retry
   "Repeatedly attempt to send a message across a chrome.runtime.Port until it
   appears futile"
   [tab-port msg]
   (go
-    (let [max-backoff 5121
-          backoff (goog.math.ExponentialBackoff. 20 max-backoff)]
-      (loop []
-        (try
-          (.postMessage tab-port msg)
-          true
-          (catch js/Error e
-            (.backoff backoff)
-            (if (= max-backoff (.getValue backoff))
-              false
-              (do
-                (<! (cljs.core.async/timeout (.getValue backoff)))
-                (recur)))))))))
+    (<! (cljs.core.async/timeout 200))
+    (loop [retry-count 10]
+      (try
+        (js/console.debug "posting" msg)
+        (.postMessage tab-port msg)
+        (js/console.debug "post ok")
+        true
+        (catch js/Error e
+          (js/console.debug "retrying..." e)
+          (if (= 0 retry-count)
+            (do
+              (js/console.error "giving up after 10 tries")
+              false)
+            (do
+              (<! (cljs.core.async/timeout 20))
+              (recur (dec retry-count)))))))))
+
+(defn- -retry-connect
+  "Repeatedly attempt to connect to a given tab until it appears futile"
+  [tab]
+  (go
+    (loop [retry-count 10]
+      (let [port (js/chrome.tabs.connect (:id tab))]
+        (js/console.debug "attempt" retry-count "port" port "error" js/chrome.runtime.lastError)
+        (cond
+          (= js/chrome.runtime.lastError nil) port
+          (= 0 retry-count) js/chrome.runtime.lastError
+          :else (do
+                  (<! (cljs.core.async/timeout 20))
+                  (recur (dec retry-count))))))))
 
 (defn- make-port
-  [tab-port]
+  [tab tab-port]
   (let [tx (cljs.core.async/chan)
         rx (cljs.core.async/chan)
-        port (Port. tab-port false tx rx)]
+        port (Port. (:id tab) tab-port false tx rx)]
     ; when the port disconnects, close the channels
     (.onDisconnect.addListener tab-port (fn [_]
                                           (cljs.core.async/close! port)))
@@ -285,15 +298,19 @@
                (when-not (nil? v)
                  (when (<! (-send-retry tab-port (prn-str v)))
                    (recur)))))
+    (when-not (nil? tab)
+      (swap! port-map assoc (:id tab) port))
     port))
 
 (defn tab-connect
   [tab]
-  (if-let [port (cljs.core/get port-map (:id tab))]
-    port
-    (let [port (make-port (js/chrome.tabs.connect (:id tab)))]
-      (swap! port-map assoc (:id tab) port)
-      port)))
+  (go
+    (if-let [port (cljs.core/get port-map (:id tab))]
+      port
+      (let [port (<! (-retry-connect tab))]
+        (if (= (type port) js/Error)
+          port
+          (make-port tab port))))))
 
 (defn tab-accept
   []
@@ -301,11 +318,11 @@
     (js/chrome.runtime.onConnect.addListener
       (fn waiter [tab-port]
         (js/chrome.runtime.onConnect.removeListener waiter)
-        (cljs.core.async/put! wait (make-port tab-port))
+        (cljs.core.async/put! wait (make-port nil tab-port))
         (cljs.core.async/close! wait)))
     wait))
 
 (defn really-send-message
   [tab msg]
   (go
-    (cljs.core.async/put! (tab-connect tab) msg)))
+    (cljs.core.async/put! (<! (tab-connect tab)) msg)))
