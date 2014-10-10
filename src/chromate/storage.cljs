@@ -2,12 +2,15 @@
   (:require
     [cljs.reader]))
 
-(deftype StorageArea [store key state watchers]
+(deftype StorageArea [store key ^:mutable state watchers]
   IAtom
   IDeref
   (-deref [_] state)
   IReset
-  (-reset! [_ new-value])
+  (-reset! [_ new-value]
+    (.set store (clj->js {key (prn-str new-value)}))
+    (set! state new-value)
+    new-value)
   ISwap
   (-swap! [_ f])
   (-swap! [_ f a])

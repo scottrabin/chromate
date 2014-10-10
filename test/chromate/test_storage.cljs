@@ -6,12 +6,17 @@
     [cemerick.cljs.test :refer [are is deftest with-test run-tests testing]]))
 
 (defn make-test-storage [k v]
-  (let [store-contents (atom {(str k) (prn-str v)})
+  (let [store-contents (atom {:calls {:get [] :set []}
+                              :store {(str k) (prn-str v)}})
         storage (clj->js {"get" (fn [key callback]
-                                  (callback (clj->js (select-keys @store-contents [key]))))
+                                  (swap! store-contents update-in [:calls :get] conj [key callback])
+                                  (when (ifn? callback)
+                                    (callback (clj->js (select-keys (:store @store-contents) [key])))))
                           "set" (fn [o callback]
-                                  (swap! store-contents merge o)
-                                  (callback))})]
+                                  (swap! store-contents update-in [:calls :set] conj [o callback])
+                                  (swap! store-contents update-in [:store] merge (js->clj o))
+                                  (when (ifn? callback)
+                                    (callback)))})]
     (chromate.storage/make-storage-area storage k)))
 
 (deftest storage-deref
@@ -24,8 +29,11 @@
          (get-in @test-storage [:complex :b]) 'two)))
 
 (deftest storage-reset!
-
-  )
+  (let [test-storage (make-test-storage "reset!-key" {:some "val"})]
+    (are [x y] (= x y)
+         (:some @test-storage) "val"
+         {:new "v"} (reset! test-storage {:new "v"})
+         (-> test-storage deref :new) "v")))
 
 (deftest storage-swap!
 
