@@ -1,11 +1,14 @@
 (ns chromate.storage
+  (:refer-clojure :exclude [sync])
   (:require
     [cljs.reader]))
 
 (deftype StorageArea [store key ^:mutable state ^:mutable watches]
   IAtom
+
   IDeref
   (-deref [_] state)
+
   IReset
   (-reset! [this new-value]
     (.set store (clj->js {key (prn-str new-value)}))
@@ -13,6 +16,7 @@
       (set! state new-value)
       (-notify-watches this old-value new-value))
     new-value)
+
   ISwap
   (-swap! [this f]
     (reset! this (f state)))
@@ -22,6 +26,7 @@
     (reset! this (f state a b)))
   (-swap! [this f a b args]
     (reset! this (apply f state a b args)))
+
   IWatchable
   (-notify-watches [this oldval newval]
     (doseq [[key f] watches]
@@ -34,7 +39,8 @@
 (defn make-storage-area [store key]
   (let [storage-area (StorageArea. store key nil nil)]
     (.get store key (fn [v]
-                      (set! (.-state storage-area) (cljs.reader/read-string (aget v key)))))
+                      (set! (.-state storage-area)
+                            (cljs.reader/read-string (aget v key)))))
     storage-area))
 
 (try
