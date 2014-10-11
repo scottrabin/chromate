@@ -12,10 +12,14 @@
     (set! state new-value)
     new-value)
   ISwap
-  (-swap! [_ f])
-  (-swap! [_ f a])
-  (-swap! [_ f a b])
-  (-swap! [_ f a b xs])
+  (-swap! [this f]
+    (reset! this (f state)))
+  (-swap! [this f a]
+    (reset! this (f state a)))
+  (-swap! [this f a b]
+    (reset! this (f state a b)))
+  (-swap! [this f a b args]
+    (reset! this (apply f state a b args)))
   IWatchable
   (-notify-watches [_ oldval newval])
   (-add-watch [_ key f])
