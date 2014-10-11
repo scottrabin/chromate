@@ -2,14 +2,16 @@
   (:require
     [cljs.reader]))
 
-(deftype StorageArea [store key ^:mutable state watchers]
+(deftype StorageArea [store key ^:mutable state ^:mutable watches]
   IAtom
   IDeref
   (-deref [_] state)
   IReset
-  (-reset! [_ new-value]
+  (-reset! [this new-value]
     (.set store (clj->js {key (prn-str new-value)}))
-    (set! state new-value)
+    (let [old-value state]
+      (set! state new-value)
+      (-notify-watches this old-value new-value))
     new-value)
   ISwap
   (-swap! [this f]
@@ -21,9 +23,13 @@
   (-swap! [this f a b args]
     (reset! this (apply f state a b args)))
   IWatchable
-  (-notify-watches [_ oldval newval])
-  (-add-watch [_ key f])
-  (-remove-watch [_ key]))
+  (-notify-watches [this oldval newval]
+    (doseq [[key f] watches]
+      (f key this oldval newval)))
+  (-add-watch [_ key f]
+    (set! watches (assoc watches key f)))
+  (-remove-watch [_ key]
+    (set! watches (dissoc watches key))))
 
 (defn make-storage-area [store key]
   (let [storage-area (StorageArea. store key nil nil)]

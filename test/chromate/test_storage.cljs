@@ -39,8 +39,7 @@
    (let [onearg-store (make-test-storage "swap!-1-key" 1)
          twoarg-store (make-test-storage "swap!-2-key" #{:one 'two})
          threearg-store (make-test-storage "swap!-3-key" {:three :initial :four "nope"})
-         manyarg-store (make-test-storage "swap!-many-key" {:one :init})
-         ]
+         manyarg-store (make-test-storage "swap!-many-key" {:one :init})]
      (testing "one argument - fn"
        (are [x y] (= x y)
             2 (swap! onearg-store inc)
@@ -59,5 +58,36 @@
             {:one :init :two 2 :three 'three} (deref manyarg-store)))))
 
 (deftest storage-watch!
-
-  )
+  (testing "basic add/notify/remove of watches"
+    (let [storage (make-test-storage "watchable" {:init :value})
+          calls (atom [])
+          watch-fn (fn [& args] (swap! calls conj args))]
+      (is (= storage) (add-watch storage :thekey watch-fn))
+      (-notify-watches storage :old :new)
+      (are [x y] (= x y)
+           (count @calls) 1
+           (first @calls) [:thekey storage :old :new])
+      (remove-watch storage :not-the-key)
+      (-notify-watches storage :theold :thenew)
+      (are [x y] (= x y)
+           (count @calls) 2
+           (second @calls) [:thekey storage :theold :thenew])
+      (remove-watch storage :thekey)
+      (-notify-watches storage :new :old)
+      (is (= (count @calls) 2)))
+    )
+  (testing "notify should be called for all reset!/swap! calls"
+    (let [storage (make-test-storage "watchable" {:init :value})
+          calls (atom [])
+          watch-fn (fn [& args] (swap! calls conj args))]
+      (add-watch storage :reset-swap watch-fn)
+      (reset! storage {:init :changed})
+      (swap! storage dissoc :init)
+      (swap! storage assoc :two "args")
+      (swap! storage assoc :three 'three 4 :four)
+      (are [x y] (= x y)
+           (count @calls) 4
+           (nth @calls 0) [:reset-swap storage {:init :value} {:init :changed}]
+           (nth @calls 1) [:reset-swap storage {:init :changed} {}]
+           (nth @calls 2) [:reset-swap storage {} {:two "args"}]
+           (nth @calls 3) [:reset-swap storage {:two "args"} {:two "args" :three 'three 4 :four}]))))
